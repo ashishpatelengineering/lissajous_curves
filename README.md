@@ -2,6 +2,8 @@
 
 An interactive, single-file visualization of Lissajous curves. Drag the top edge to set the horizontal frequency and the left edge to set the vertical frequency, and watch the resulting curve draw itself in and settle to rest.
 
+The whole thing is one self-contained `index.html` — no build step, no dependencies, no network. Open it in any modern browser (light and dark themes are both handled automatically).
+
 ---
 
 ## The Math
@@ -58,7 +60,7 @@ This app fixes the phase at **δ = π/2** — using cosine for `x` and sine for 
 
 ## The Code
 
-Everything lives in `lissajous.html`: markup, styles, and a single `<script>`. It renders onto one `<canvas>` with the 2D context and drives animation with `requestAnimationFrame`. There is no framework and no external library.
+Everything lives in `index.html`: markup, styles, and a single `<script>`. It renders onto one `<canvas>` with the 2D context and drives animation with `requestAnimationFrame`. There is no framework and no external library.
 
 ### The core mapping
 
@@ -112,7 +114,11 @@ Pointer events (so mouse, trackpad, and touch all work through one code path) dr
 
 ### Theming and color discipline
 
-All colors are CSS custom properties (`--bg`, `--ink`, `--trace`, `--accent`, …) defined once for light mode and again inside a `prefers-color-scheme: dark` block, so the piece follows the system theme with no JavaScript. The renderer reads these variables each frame, which is why switching themes is seamless. The visual rule throughout is deliberate restraint: everything is monochrome graphite except a single accent-colored moving head (and the brief accent bloom on an active rail).
+All colors are CSS custom properties defined once for light mode and again inside a `prefers-color-scheme: dark` block, so the piece follows the system theme with no JavaScript. The renderer reads the relevant variables each frame, which is why switching themes is seamless.
+
+The page uses a layered background: a slightly tinted base (`--page`) with a soft, neutral radial glow (`--glow`) centered behind the visualization, so the surrounding space reads as considered atmosphere rather than flat emptiness. The card surface (`--bg`) is kept lighter than the page and lifted with a soft layered drop shadow, so the visualization floats as a distinct object rather than dissolving into the background.
+
+The visual rule throughout is deliberate restraint: everything on the canvas is monochrome graphite except a single accent-colored moving head (and the brief accent bloom on an active rail). The title uses a softened near-black to suit its thin weight, and the instruction line a mid-grey tuned to hold contrast against the tinted background.
 
 ### Small helpers
 
@@ -123,8 +129,24 @@ All colors are CSS custom properties (`--bg`, `--ink`, `--trace`, `--accent`, �
 
 ## Files
 
-- `lissajous.html` — the entire application (open this).
+- `index.html` — the entire application (open this).
 - `README.md` — this document.
+
+## Running it
+
+Locally, just open `index.html` in a browser — there's nothing to install or build.
+
+### Hosting on GitHub Pages
+
+Because it's a single static file named `index.html`, it works on GitHub Pages with no configuration:
+
+1. Push these files to the repository root (or into a `/docs` folder).
+2. On GitHub, go to **Settings → Pages**.
+3. Under **Build and deployment**, set **Source** to *Deploy from a branch*.
+4. Choose your branch (e.g. `main`) and the folder — `/ (root)` if the files are at the top level, or `/docs` if you put them there.
+5. Save. After a minute or two your site is live at `https://<your-username>.github.io/<repo-name>/`.
+
+Since the file is named `index.html`, that root URL loads the visualization directly — no filename needed in the path.
 
 ## License
 
