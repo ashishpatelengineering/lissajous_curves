@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lissajous</title>
+<style>
+  :root {
+    --bg: #fbfbfd;
+    --ink: #1d1d1f;
+    --muted: #86868b;
+    --line: #e8e8ed;
+    --accent: #0071e3;
+    --trace: #1d1d1f;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --ink: #f5f5f7;
+      --muted: #86868b;
+      --line: #1d1d1f;
+      --accent: #2997ff;
+      --trace: #f5f5f7;
+    }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+  }
+
+  .stage {
+    width: 100%;
+    max-width: 480px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+    animation: rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  header { text-align: center; }
+
+  h1 {
+    font-size: 34px;
+    font-weight: 200;
+    letter-spacing: 0.005em;
+  }
+
+  header p {
+    margin-top: 8px;
+    font-size: 16px;
+    font-weight: 300;
+    color: var(--muted);
+    letter-spacing: -0.01em;
+  }
+
+  .canvas-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 28px;
+    background: var(--bg);
+    box-shadow: 0 1px 0 rgba(0,0,0,0.02), 0 0 0 0.5px var(--line);
+    overflow: hidden;
+    touch-action: none;
+  }
+
+  .canvas-wrap::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: 28px;
+    box-shadow: inset 0 0 60px rgba(0,0,0,0.03);
+  }
+  @media (prefers-color-scheme: dark) {
+    .canvas-wrap::after { box-shadow: inset 0 0 80px rgba(0,0,0,0.5); }
+  }
+
+  canvas { width: 100%; height: 100%; display: block; }
+
+
+</style>
+</head>
+<body>
+  <div class="stage">
+    <header>
+      <h1>Lissajous Curves</h1>
+      <p>Drag the top edge and the left edge to tune each frequency</p>
+    </header>
+
+    <div class="canvas-wrap" id="wrap">
+      <canvas id="c"></canvas>
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('wrap');
+
+const FMIN = 1, FMAX = 8;
+const delta = Math.PI / 2;
+let fx = 4, fy = 3;
+let t = 0;
+let revealStart = null;
+let lapCount = 0, settling = false, restProg = 0, atRest = false;
+
+// which rail is being dragged: 'top' | 'left' | null, and a hover state
+let dragging = null, hover = null;
+
+function style() { return getComputedStyle(document.documentElement); }
+
+function toRGB(c) {
+  c = c.trim();
+  if (c[0] === '#') {
+    let h = c.slice(1);
+    if (h.length === 3) h = h.split('').map(x => x + x).join('');
+    return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+  }
+  const m = c.match(/\d+/g);
+  return m ? m.slice(0,3).map(Number) : [0,0,0];
+}
+function mix(a, b, f) {
+  const A = toRGB(a), B = toRGB(b);
+  return `rgb(${Math.round(A[0]+(B[0]-A[0])*f)},${Math.round(A[1]+(B[1]-A[1])*f)},${Math.round(A[2]+(B[2]-A[2])*f)})`;
+}
+function hexA(c, a) { const [r,g,b] = toRGB(c); return `rgba(${r},${g},${b},${a})`; }
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function dims(w, h) {
+  const pad = w * 0.16;
+  return {
+    pad,
+    ax: (w - pad * 2) / 2,
+    ay: (h - pad * 2) / 2,
+    cx: w / 2,
+    cy: h / 2,
+    railTop: h * 0.06,
+    railLeft: w * 0.06
+  };
+}
+
+function pt(theta, w, h) {
+  const d = dims(w, h);
+  return {
+    x: d.cx + d.ax * Math.sin(fx * theta + delta),
+    y: d.cy + d.ay * Math.sin(fy * theta)
+  };
+}
+
+function replay() {
+  revealStart = performance.now();
+  t = 0;
+  lapCount = 0; settling = false; restProg = 0;
+  atRest = false;
+}
+
+// map a frequency 1..8 to a position along a rail (with margin)
+function freqToPos(f, start, end) {
+  return start + (end - start) * (f - FMIN) / (FMAX - FMIN);
+}
+
+function draw() {
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  const s = style();
+  const traceCol = s.getPropertyValue('--trace').trim();
+  const accent = s.getPropertyValue('--accent').trim();
+  const bg = s.getPropertyValue('--bg').trim();
+  const d = dims(w, h);
+
+  ctx.clearRect(0, 0, w, h);
+
+  // ---- interactive rails (top = horizontal freq fx, left = vertical freq fy) ----
+  const railA = d.pad, railB = w - d.pad;   // rail extent
+  drawRail(d.railTop, railA, railB, 'top', traceCol, accent);
+  drawRail(d.railLeft, d.pad, h - d.pad, 'left', traceCol, accent, true);
+
+  // ---- reveal: brief hold, then luminous draw-in ----
+  const holdDur = 700;    // stillness before the draw-in begins
+  const revealDur = 2400;
+  if (revealStart === null) revealStart = performance.now();
+  const since = performance.now() - revealStart;
+  const rp = Math.min(1, Math.max(0, (since - holdDur)) / revealDur);
+  const eased = 1 - Math.pow(1 - rp, 3);
+
+  ctx.beginPath();
+  const steps = 1600;
+  const upTo = Math.floor(steps * eased);
+  for (let i = 0; i <= upTo; i++) {
+    const theta = (i / steps) * Math.PI * 2;
+    const p = pt(theta, w, h);
+    i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+  }
+  ctx.strokeStyle = traceCol;
+  ctx.globalAlpha = 0.15;
+  ctx.lineWidth = 1.75;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  if (rp < 1) { requestAnimationFrame(draw); return; }
+
+  // ---- settle: run a couple of laps after reveal, then ease to rest ----
+  const lapsBeforeRest = 2;
+  const restSpan = Math.PI * 1.4; // angle over which the fade-out happens
+  let speed = 0.012;
+  let vis = 1; // visibility of the live tracer (tail + head + projections)
+
+  if (!settling && lapCount >= lapsBeforeRest) settling = true;
+
+  if (settling) {
+    const remain = Math.max(0, restSpan - restProg);
+    const k = remain / restSpan;          // 1 → 0
+    speed = 0.012 * (0.15 + 0.85 * k);    // slow down as it approaches rest
+    vis = k;
+    if (k <= 0.001) atRest = true;
+  }
+
+  if (!atRest) {
+    // ---- tail ----
+    const tail = 0.95, tailSteps = 96;
+    for (let i = tailSteps; i > 0; i--) {
+      const th0 = t - (i / tailSteps) * tail;
+      const th1 = t - ((i - 1) / tailSteps) * tail;
+      const p0 = pt(th0, w, h), p1 = pt(th1, w, h);
+      const f = 1 - i / tailSteps;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+      ctx.strokeStyle = mix(traceCol, accent, Math.pow(f, 1.6));
+      ctx.globalAlpha = f * 0.95 * vis;
+      ctx.lineWidth = 1.8 + f * 1.4;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    const head = pt(t, w, h);
+
+    // projections
+    ctx.setLineDash([2, 5]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = traceCol;
+    ctx.globalAlpha = 0.16 * vis;
+    ctx.beginPath();
+    ctx.moveTo(head.x, d.railTop); ctx.lineTo(head.x, head.y);
+    ctx.moveTo(d.railLeft, head.y); ctx.lineTo(head.x, head.y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+
+    ctx.globalAlpha = vis;
+    drawDot(head.x, d.railTop, traceCol);
+    drawDot(d.railLeft, head.y, traceCol);
+    ctx.globalAlpha = 1;
+
+    // glow + head
+    const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 22);
+    glow.addColorStop(0, hexA(accent, 0.45 * vis));
+    glow.addColorStop(1, hexA(accent, 0));
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(head.x, head.y, 22, 0, Math.PI*2); ctx.fill();
+
+    ctx.globalAlpha = vis;
+    ctx.beginPath(); ctx.arc(head.x, head.y, 5, 0, Math.PI*2);
+    ctx.fillStyle = accent; ctx.fill();
+    ctx.beginPath(); ctx.arc(head.x, head.y, 5, 0, Math.PI*2);
+    ctx.strokeStyle = bg; ctx.lineWidth = 2; ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // advance
+    t += speed;
+    if (settling) restProg += speed;
+    if (t >= Math.PI * 2) { t -= Math.PI * 2; lapCount++; }
+  }
+
+  requestAnimationFrame(draw);
+}
+
+// draw a rail with tick marks and a draggable knob showing current freq
+function drawRail(fixed, a, b, which, traceCol, accent, vertical) {
+  const active = (dragging === which) || (hover === which);
+  const f = which === 'top' ? fx : fy;
+  const knob = freqToPos(f, a, b);
+
+  // rail line
+  ctx.strokeStyle = traceCol;
+  ctx.globalAlpha = active ? 0.28 : 0.12;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (vertical) { ctx.moveTo(fixed, a); ctx.lineTo(fixed, b); }
+  else { ctx.moveTo(a, fixed); ctx.lineTo(b, fixed); }
+  ctx.stroke();
+
+  // dots
+  for (let k = FMIN; k <= FMAX; k++) {
+    const p = freqToPos(k, a, b);
+    const dx = vertical ? fixed : p;
+    const dy = vertical ? p : fixed;
+    ctx.beginPath();
+    ctx.arc(dx, dy, 1.6, 0, Math.PI * 2);
+    ctx.fillStyle = traceCol;
+    ctx.globalAlpha = active ? 0.3 : 0.16;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // knob
+  const kx = vertical ? fixed : knob;
+  const ky = vertical ? knob : fixed;
+  ctx.beginPath();
+  ctx.arc(kx, ky, active ? 7 : 5.5, 0, Math.PI * 2);
+  ctx.fillStyle = active ? accent : traceCol;
+  ctx.globalAlpha = active ? 1 : 0.85;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // freq number beside the knob
+  ctx.fillStyle = active ? accent : traceCol;
+  ctx.globalAlpha = active ? 1 : 0.6;
+  ctx.font = '400 13px -apple-system, sans-serif';
+  ctx.textBaseline = 'middle';
+  if (vertical) { ctx.textAlign = 'left'; ctx.fillText(String(f), fixed + 14, knob); }
+  else { ctx.textAlign = 'center'; ctx.fillText(String(f), knob, fixed - 14); }
+  ctx.globalAlpha = 1;
+}
+
+function drawDot(x, y, col) {
+  ctx.beginPath();
+  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = col;
+  ctx.globalAlpha = 0.85;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+// ---- interaction ----
+function localPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+  return { x: cx, y: cy, w: rect.width, h: rect.height };
+}
+
+function posToFreq(p, a, b) {
+  const r = Math.max(0, Math.min(1, (p - a) / (b - a)));
+  return Math.round(FMIN + r * (FMAX - FMIN));
+}
+
+function railHit(pos) {
+  const d = dims(pos.w, pos.h);
+  const nearTop = Math.abs(pos.y - d.railTop) < 22 && pos.x > d.pad - 10 && pos.x < pos.w - d.pad + 10;
+  const nearLeft = Math.abs(pos.x - d.railLeft) < 22 && pos.y > d.pad - 10 && pos.y < pos.h - d.pad + 10;
+  if (nearTop) return 'top';
+  if (nearLeft) return 'left';
+  return null;
+}
+
+function applyDrag(pos) {
+  const d = dims(pos.w, pos.h);
+  if (dragging === 'top') {
+    const nf = posToFreq(pos.x, d.pad, pos.w - d.pad);
+    if (nf !== fx) { fx = nf; replay(); }
+  } else if (dragging === 'left') {
+    const nf = posToFreq(pos.y, d.pad, pos.h - d.pad);
+    if (nf !== fy) { fy = nf; replay(); }
+  }
+}
+
+wrap.addEventListener('pointerdown', e => {
+  const pos = localPos(e);
+  const hit = railHit(pos);
+  if (hit) {
+    dragging = hit;
+    wrap.setPointerCapture(e.pointerId);
+    applyDrag(pos);
+  }
+});
+wrap.addEventListener('pointermove', e => {
+  const pos = localPos(e);
+  if (dragging) { applyDrag(pos); }
+  else {
+    hover = railHit(pos);
+    canvas.style.cursor = hover ? 'grab' : 'default';
+  }
+});
+wrap.addEventListener('pointerup', e => { dragging = null; });
+wrap.addEventListener('pointerleave', e => { hover = null; });
+
+window.addEventListener('resize', resize);
+resize();
+draw();
+</script>
+</body>
+</html>
