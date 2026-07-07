@@ -1,5 +1,6 @@
 # Lissajous Curves
 
+(Lissajous Curves)[https://ashishpatelengineering.github.io/lissajous_curves/]
 An interactive, single-file visualization of Lissajous curves. Drag the top edge to set the horizontal frequency and the left edge to set the vertical frequency, and watch the resulting curve draw itself in and settle to rest.
 
 The whole thing is one self-contained `index.html` — no build step, no dependencies, no network. Open it in any modern browser (light and dark themes are both handled automatically).
